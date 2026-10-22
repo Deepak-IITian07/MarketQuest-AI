@@ -7,6 +7,11 @@ and the answer was correct for the question asked.
 This is a spike report. It is the only file this spike was asked to write.
 Nothing in `backend/`, `backend/requirements.txt`, or `README.md` was touched.
 
+> **Since this spike was written, the Decider has been integrated into the
+> backend** — `POST /agent/decide` uses the service described here. This report
+> is unchanged: it remains the record of what was measured. See
+> [§10 of the README](../README.md#10-the-decider-2b-service-and-the-agent-endpoint).
+
 ---
 
 ## 1. Verdict at a glance

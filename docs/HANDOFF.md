@@ -1,9 +1,9 @@
 # Handoff
 
-**Date:** 2026-10-23 · **Repo:** MarketQuest AI · **Branch:** `main` (origin/main up to date, nothing committed yet)
+**Date:** 2026-10-23 · **Repo:** MarketQuest AI · **Branch:** `main`
 
-One-page summary of where the project stands, what was measured, what is
-blocked, and what to do next. Full detail lives in the linked documents.
+Where the project stands, what was measured, what is blocked, and what to do
+next. Full detail lives in the linked documents.
 
 ---
 
@@ -11,42 +11,56 @@ blocked, and what to do next. Full detail lives in the linked documents.
 
 | Part | State | Detail |
 |---|---|---|
-| **Part 1** — scaffold | Done, untouched | FastAPI `/health`, React landing scaffold, config, data generator |
-| **Part 2** — market backend | Done, untouched | `/market/*` endpoints, stdlib-only analysis, 46 tests |
-| **Part 2** — market dashboard | Done this session | React dashboard reading the three `/market` endpoints |
-| **Decider 2B spike** | Done this session | Real model, real HTTP decision, measured |
-| **Bedrock research** | Done this session | Plan + citations, nothing implemented |
+| **Part 1** — scaffold | Done | FastAPI `/health`, React scaffold, config, data generator |
+| **Part 2** — market backend | Done | `/market/*` endpoints, stdlib-only analysis, 46 tests |
+| **Part 2** — market dashboard | Done | React dashboard reading the three `/market` endpoints |
+| **Decider 2B spike** | Done | Real model, real HTTP decision, measured |
+| **Bedrock research** | Done | Plan + citations, nothing implemented |
+| **Part 3 (Decider half)** | **Done, verified against the running model** | `POST /agent/decide`: the Decider chooses the tool, the backend runs it |
 
-### What the dashboard does
-`frontend/src/pages/Dashboard.tsx` reads **only** `GET /market/symbols`,
-`GET /market/prices/{symbol}` and `GET /market/analysis/{symbol}`. It shows a
-symbol selector, the latest sample close with two deltas, an SVG price-history
-chart with a hover tooltip and a toggleable moving-average overlay, six metric
-tiles, and loading / error / empty states. No chart library, no new npm
-dependency, no chat widget, no external API, no auth.
+Committed as `1a6071d` → `4a76851` → `df2988d`. The Part 3 work is in the
+working tree, uncommitted.
 
-**Synthetic-data labelling is in four places:** the "Synthetic demo data" badge,
-a `DEMO` tag on each symbol card, the data-source tile showing `synthetic_demo`,
-and the footer quoting the backend's own `disclaimer` verbatim.
+### What Part 3 added
+
+```
+POST /agent/decide
+   -> app/agent/decider.py    HTTP client for the local Decider service
+   -> app/agent/tools.py      the allowlist of read-only market operations
+   -> app/agent/runner.py     ask the model, check the answer, run the tool
+   -> app/services/market_queries.py   response builders shared with /market
+   -> app/api/agent.py        the endpoint + GET /agent/status
+```
+
+The model chooses a **tool name** and nothing else. The name is looked up by
+exact match in a fixed allowlist; anything else is rejected with
+`502 invalid_decision` and never executed. Every tool is read-only.
+
+**The dashboard is unchanged** — no frontend chat interface was added, as
+instructed.
 
 ---
 
 ## 2. Test and build results
 
 ```
-backend   pytest          -> 46 passed, 1 warning (0.90s)
+backend   pytest          -> 67 passed, 1 warning (1.83s)
+          46 pre-existing + 21 new in tests/test_agent.py
           (warning is Starlette/httpx deprecation - pre-existing, not ours)
 
-frontend  npm run build   -> tsc --noEmit && vite build, built in 201ms
+frontend  npm run build   -> tsc --noEmit && vite build, built in 264ms
           dist/assets/index-cSMHH8p3.js  233.46 kB | gzip 73.26 kB
           dist/assets/index-H85w7uhX.css   8.34 kB | gzip  2.57 kB
+          (byte-identical to the Part 2 build - no frontend file was touched)
 ```
 
-Browser-verified against the live backend: the page calls only the three
-`/market` endpoints plus `/health`; rendered figures match the API exactly
-(₹854.23 / ₹858.58); the chart draws all 30 points; the error state shows an
-actionable message and a working retry button; no horizontal scroll at 390 px;
-0 console errors.
+The 21 new tests mock the HTTP boundary with `httpx.MockTransport`, so the real
+client code — request body, response parsing, error mapping — is exercised
+without loading the model or running any inference. They cover: successful
+selection, each tool executing correctly, an invalid choice, a timeout, an
+unavailable service, a malformed answer, a non-choice answer, non-JSON, the
+`no_action` path, empty-question and unknown-symbol validation, symbol
+normalisation, the status endpoint, and the loopback-only URL rule.
 
 ---
 
@@ -64,23 +78,48 @@ actionable message and a working retry button; no horizontal scroll at 390 px;
 | Startup, warm (weights on disk) | **28.1 s** |
 | Decision, first in a process | **5,826.81 ms** |
 | Decision, repeat (prefix cache) | **3,702.23 ms** |
+| Decision through `/agent/decide` | **6,384 – 8,546 ms** (5 real calls) |
 | Peak resident memory | **5,589 MB** |
 | Disk | 4,561.7 MB cache + 841.3 MB venv |
 
-**The decision that was taken.** Given *"Show me DEMOTECH and tell me how
-volatile it has been"*, the model chose **`get_analysis`** (p = 0.6846,
-confidence 0.6057) over `get_prices` (0.2234) — correct, since `get_analysis`
-returns volatility. Byte-identical across three calls in two separate
-processes. It returns a choice and calibrated probabilities, **no text**.
+### Real decisions taken through the endpoint
 
-### Two constraints for Part 3
-1. **Every tool option needs a real description.** The same question asked
-   over HTTP (which carries a description per option) chose `get_analysis` at
-   confidence 0.61; asked via the `ask` CLI (bare option names only) it chose
-   `get_prices` at 0.29. Descriptions are what make the choice well-posed.
-2. **The service has no authentication.** It must stay bound to `127.0.0.1`. If
-   it is unreachable, the backend must degrade gracefully and say the decision
-   was not made by the model — never fabricate a choice.
+| Question | Chose | p | Confidence |
+|---|---|---:|---:|
+| "Tell me how volatile DEMOTECH has been." | `get_analysis` | 0.7565 | 0.6956 |
+| "Show me the full daily price history for DEMOBANK…" | `get_prices` | 0.9807 | 0.9759 |
+| "What symbols are available to look at?" | `get_symbols` | 0.8587 | 0.8233 |
+| "How much did DEMOENERGY gain or lose day to day?" | `get_returns` | 0.6341 | 0.5426 |
+| "What is the weather in Mumbai tomorrow?" | `no_action` | 0.8254 | 0.7817 |
+
+The model discriminates — it is not always picking the same tool — and it
+correctly declines to fetch data for a question no tool can answer.
+
+### Two constraints the implementation respects
+
+1. **Every tool option needs a real description.** The spike asked the same
+   question over HTTP (which carries a description per option) and via the
+   `ask` CLI (bare option names only). With descriptions the model chose
+   `get_analysis` at confidence 0.61; with bare names it chose `get_prices` at
+   0.29. Descriptions are what make the choice well-posed, so every entry in
+   `app/agent/tools.py` has one.
+2. **The service has no authentication.** It stays bound to `127.0.0.1`, and
+   `DECIDER_BASE_URL` is validated at startup — a non-loopback host is refused.
+   If the service is unreachable, the backend says so and never fabricates a
+   choice.
+
+### Failure behaviour
+
+| Status | `error` | Meaning |
+|---|---|---|
+| `400` | `missing_symbol` | The chosen tool needs a symbol and none was given. The model's choice is still reported. |
+| `502` | `invalid_decision` | The model named something not on the allowlist. |
+| `502` | `invalid_response` | The service answered with something that was not a choice. |
+| `503` | `decider_timeout` | No answer within `DECIDER_TIMEOUT_SECONDS` (default 15). |
+| `503` | `decider_unavailable` | The service could not be reached. |
+
+Every failure body has `"decision_made": false` and a message that says in
+words that the model did not make a usable decision.
 
 ---
 
@@ -108,65 +147,38 @@ Vite bundles frontend env vars into browser code.
 | # | Issue | Severity |
 |---|---|---|
 | 1 | No AWS profile on this machine — blocks all Bedrock work | Blocker |
-| 2 | Decider not wired into the backend — Part 3 unstarted | Expected |
-| 3 | Python 3.14 wheels for `torch`/`transformers` untested; moot (Decider venv is 3.12) | Low |
-| 4 | Full licence sweep of the pinned dependency tree not run | Low |
-| 5 | Gemma 4 checkpoint install path still unverified; does not affect the 2B Qwen3.5 path | Low |
+| 2 | A decision takes 6–9 s on CPU, so any UI needs a waiting state | Known |
+| 3 | The `state` prefix is rebuilt per question, so the service's prefix cache rarely helps | Low |
+| 4 | `noul` and `score` question types were never exercised — only `choice` | Low |
+| 5 | Full licence sweep of the pinned dependency tree not run | Low |
 | 6 | Strands `BedrockModel` import path — upstream doc URL 404s | Low |
-| 7 | Not measured: `noul` / `score` question types, `--max-batch` tuning, CUDA latency, vision tower | Info |
+| 7 | Not measured: `--max-batch` tuning, CUDA latency, the vision tower | Info |
 | 8 | DevRelay MCP is unauthenticated — all DEV/MLH tools return "Not connected to MLH", so the community-wisdom lookup could not run. Run `! devrelay login` to enable it | Info |
 
 ---
 
-## 6. Next task — Part 3 integration
+## 6. Next task — Part 3, the Bedrock half
 
-**Goal:** the backend uses Decider 2B for at least one meaningful decision,
-paired with Amazon Bedrock. That pairing is the hackathon submission
-requirement — Decider alone is not enough.
+**Goal:** Bedrock explains the numbers the Decider's chosen tool produced.
+The Decider chooses the tool; Bedrock only explains. Bedrock must never
+choose a tool and must never invent a number.
 
-### 6.1 The Decider side (no blockers — start here)
+Blocked on §4. When the AWS side is ready:
 
-The venv and weights are already on disk, so this costs no new install.
+1. Add `boto3` to `backend/requirements.txt` (it is the only new dependency;
+   `boto3` is not installed yet and nothing was installed for this).
+2. Add a `app/services/bedrock.py` that calls `bedrock-runtime` `converse`
+   with the analysis result supplied as data, and returns a plain-text
+   explanation. The research doc has a minimal, credential-safe example.
+3. Extend the agent flow: the Decider picks the tool, the tool runs, and
+   Bedrock turns the result into an explanation. Return both the model's
+   probabilities and the explanation, so the decision is still auditable.
+4. Keep the synthetic-data warning in the Bedrock prompt. The model must not
+   present demo prices as real quotes.
+5. Never log or echo the AWS credentials, and never let a Bedrock failure
+   produce a fabricated explanation — say the explanation was not generated.
 
-1. **Start the service** (separate venv, binds loopback only):
-   ```powershell
-   $SPIKE = "path\to\MarketQuest-AI\experiments\decider-spike"
-   $env:HF_HOME = "$SPIKE\hf-cache"
-   & "$SPIKE\.venv\Scripts\strands-decider.exe" serve `
-       StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --host 127.0.0.1 --port 8100 --device cpu
-   ```
-   Cold start is ~4 min (downloads); warm start is 28 s. **Start it before a
-   demo, not during one.**
-
-2. **Add a Decider client to the backend.** `httpx` is already a backend
-   dependency — no new package needed. Keep it in `app/services/`, with a
-   `POST http://127.0.0.1:8100/v1/systemone` wrapper, a short timeout, and
-   graceful degradation when the service is down.
-
-3. **Build the tool registry** with a real description per tool. This is the
-   single most important input to the model's quality — see §3, constraint 1.
-   Candidate tools, matching the existing endpoints:
-   `get_symbols`, `get_prices`, `get_analysis`, `get_returns`, plus a
-   `no_action` option.
-
-4. **Add one endpoint** (e.g. `POST /agent/analyze`) that asks the Decider
-   which tool to call, validates the answer against the offered option set,
-   executes that tool against the existing service layer, and returns both the
-   result **and** the Decider's probabilities and confidence.
-
-5. **Surface the decision.** Return the probabilities and confidence, not just
-   the winning choice — that is the interesting part of the Decider and it is
-   what makes the decision auditable. The frontend already has an error state
-   and a retry button ready for the ~3.7 s decision latency.
-
-### 6.2 The Bedrock side (blocked on §4)
-
-Only start once the AWS account-side items are done. The research doc has a
-minimal, credential-safe `converse()` example and the prompt shape: the Decider
-chooses the tool, Bedrock explains the numbers that tool produced. Bedrock must
-never choose the tool, and must never invent a number.
-
-### 6.3 Also still to do
+### Also still to do
 - Virtual trading and portfolio management (the game layer).
 - A demo video under three minutes, and a Builder Center article — both are
   submission requirements, and the measured latency table in §3 is the
@@ -179,20 +191,18 @@ never choose the tool, and must never invent a number.
 
 Safe to commit. Verified on 2026-10-23:
 
-- The git index is **empty** — nothing is staged yet.
-- 22 paths in the change set: 14 new files (largest is `docs/bedrock-research.md`
-  at 30 KB) and 8 modified or deleted tracked files. Total well under 200 KB.
-- **Not tracked and not tracked-by-accident:** `backend/.env`, `frontend/.env`,
+- The git index is **empty** — nothing is staged.
+- The current change set is **16 paths**: 9 modified, 7 new, all source and
+  documentation.
+- **Not tracked and not tracked by accident:** `backend/.env`, `frontend/.env`,
   every `.venv/`, `node_modules/`, `frontend/dist/`,
-  `experiments/decider-spike/hf-cache/` (4.56 GB), the spike logs, and the pip
-  reports. All are covered by `.gitignore` and confirmed with
-  `git check-ignore -v`.
+  `experiments/decider-spike/hf-cache/` (4.56 GB), the spike logs and pip
+  reports, and every `__pycache__/`. All are covered by `.gitignore` and
+  confirmed with `git check-ignore -v`.
 - The two `.env.example` files **are** tracked, by design. Every AWS value in
-  them is an empty placeholder; the only non-empty values are `APP_ENV`,
-  `CORS_ORIGINS` and `VITE_API_BASE_URL`.
-- A pattern scan (AWS key IDs, private keys, bearer tokens, GitHub/Slack/OpenAI
-  tokens, JWTs) across all 22 changed files found **nothing**.
-- The on-disk `.env` files contain **0** non-empty secret-ish assignments.
+  them is an empty placeholder.
+- No credential-shaped strings (AWS key IDs, private keys, bearer tokens,
+  GitHub/Slack/OpenAI tokens, JWTs) in any changed file.
 
 Local-only artifacts still on disk (safe to delete later, not tracked):
 `experiments/decider-spike/.venv/` (841 MB), `experiments/decider-spike/hf-cache/`

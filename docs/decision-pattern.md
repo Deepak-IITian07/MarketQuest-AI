@@ -1,8 +1,10 @@
 # Decision pattern: `#tool-selection` + Strands Decider 2B research
 
-**Status: Part 2 research complete, and the runtime spike has now verified the
-setup end to end on this machine. The Decider is NOT yet integrated into the
-backend.**
+**Status: Part 2 research complete, the runtime spike has verified the setup end
+to end on this machine, and the Decider is now integrated into the backend.**
+`POST /agent/decide` asks the model which market tool to run and then runs that
+tool — see [§10 of the README](../README.md#102-post-agentdecide--the-model-picks-the-tool).
+Bedrock, which explains the numbers the tool produced, is still not built.
 
 This file has two parts:
 
