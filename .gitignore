@@ -24,6 +24,9 @@ credentials*
 .DS_Store
 Thumbs.db
 *.log
-# Data (keep folder)
+# Data (keep folder + the committed synthetic sample dataset)
 data/*
 !data/.gitkeep
+!data/README.md
+!data/generate_sample_data.py
+!data/sample_prices.csv
