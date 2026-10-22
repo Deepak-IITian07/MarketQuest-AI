@@ -24,6 +24,11 @@ credentials*
 .DS_Store
 Thumbs.db
 *.log
+# Decider spike: local model weights (~4.6 GB) and pip artifacts
+/experiments/*/hf-cache/
+/experiments/*/*.log
+/experiments/*/install-report.json
+/experiments/*/dryrun-report.json
 # Data (keep folder + the committed synthetic sample dataset)
 data/*
 !data/.gitkeep

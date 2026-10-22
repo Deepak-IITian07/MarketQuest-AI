@@ -1,0 +1,47 @@
+{
+  "command": "C:\\Users\\DELL\\OneDrive\\Desktop\\Crezy Dev\\Local\\MarketQuest-AI\\MarketQuest-AI\\experiments\\decider-spike\\.venv\\Scripts\\strands-decider.exe serve StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --host 127.0.0.1 --port 8101 --device cpu",
+  "cache": "warm (already downloaded)",
+  "startup": {
+    "ok": true,
+    "seconds": 28.08
+  },
+  "health": {
+    "status": "ok",
+    "model": "strands-decider-2B-qwen3.5-v1-2610",
+    "checkpoint": "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610",
+    "base_model": "Qwen/Qwen3.5-2B-Base",
+    "num_slots": 24,
+    "max_length": 4096,
+    "temperature": 1.0545210242263665,
+    "device": "cpu",
+    "prefix_cache": true,
+    "vision": false
+  },
+  "decision": {
+    "http_status": 200,
+    "client_latency_ms": 5799.92,
+    "server_latency_ms": 5789.91,
+    "body": {
+      "model": "strands-decider-2B-qwen3.5-v1-2610",
+      "answers": {
+        "next_tool": {
+          "type": "choice",
+          "choice": "get_analysis",
+          "probabilities": {
+            "get_symbols": 0.003,
+            "get_prices": 0.2234,
+            "get_analysis": 0.6846,
+            "get_returns": 0.085,
+            "no_action": 0.004
+          },
+          "confidence": 0.6057
+        }
+      },
+      "usage": {
+        "input_tokens": 196,
+        "output_tokens": 1
+      },
+      "latency_ms": 5789.91
+    }
+  }
+}

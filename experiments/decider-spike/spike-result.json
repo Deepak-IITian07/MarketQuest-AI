@@ -1,0 +1,79 @@
+{
+  "command": "C:\\Users\\DELL\\OneDrive\\Desktop\\Crezy Dev\\Local\\MarketQuest-AI\\MarketQuest-AI\\experiments\\decider-spike\\.venv\\Scripts\\strands-decider.exe serve StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --host 127.0.0.1 --port 8100 --device cpu",
+  "checkpoint": "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610",
+  "device": "cpu",
+  "port": 8100,
+  "startup": {
+    "ok": true,
+    "seconds": 253.86
+  },
+  "health": {
+    "status": "ok",
+    "model": "strands-decider-2B-qwen3.5-v1-2610",
+    "checkpoint": "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610",
+    "base_model": "Qwen/Qwen3.5-2B-Base",
+    "num_slots": 24,
+    "max_length": 4096,
+    "temperature": 1.0545210242263665,
+    "device": "cpu",
+    "prefix_cache": true,
+    "vision": false
+  },
+  "decision": {
+    "http_status": 200,
+    "client_latency_ms": 5866.02,
+    "server_latency_ms": 5826.81,
+    "body": {
+      "model": "strands-decider-2B-qwen3.5-v1-2610",
+      "answers": {
+        "next_tool": {
+          "type": "choice",
+          "choice": "get_analysis",
+          "probabilities": {
+            "get_symbols": 0.003,
+            "get_prices": 0.2234,
+            "get_analysis": 0.6846,
+            "get_returns": 0.085,
+            "no_action": 0.004
+          },
+          "confidence": 0.6057
+        }
+      },
+      "usage": {
+        "input_tokens": 196,
+        "output_tokens": 1
+      },
+      "latency_ms": 5826.81
+    }
+  },
+  "decision_repeat": {
+    "http_status": 200,
+    "client_latency_ms": 3706.31,
+    "server_latency_ms": 3702.23,
+    "body": {
+      "model": "strands-decider-2B-qwen3.5-v1-2610",
+      "answers": {
+        "next_tool": {
+          "type": "choice",
+          "choice": "get_analysis",
+          "probabilities": {
+            "get_symbols": 0.003,
+            "get_prices": 0.2234,
+            "get_analysis": 0.6846,
+            "get_returns": 0.085,
+            "no_action": 0.004
+          },
+          "confidence": 0.6057
+        }
+      },
+      "usage": {
+        "input_tokens": 196,
+        "output_tokens": 1
+      },
+      "latency_ms": 3702.23
+    }
+  },
+  "peak_rss_mb": 5589.3,
+  "hf_cache_mb": 4561.7,
+  "hf_cache_mb_note": "Corrected after the fact. The run originally reported 13684.4 because the measurement followed the Hugging Face cache's symlinks and counted each blob more than once. 4561.7 MB is the true on-disk size, confirmed by de-duplicating on (device, inode). The measurement code in scripts/run_spike.py has been fixed; every other field is the raw, unmodified output of the run."
+}

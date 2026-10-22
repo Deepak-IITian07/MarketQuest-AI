@@ -1,6 +1,8 @@
 # Decision pattern: `#tool-selection` + Strands Decider 2B research
 
-**Status: Part 2 research complete. The Decider is NOT yet integrated.**
+**Status: Part 2 research complete, and the runtime spike has now verified the
+setup end to end on this machine. The Decider is NOT yet integrated into the
+backend.**
 
 This file has two parts:
 
@@ -15,7 +17,14 @@ This file has two parts:
 Research performed on **2026-10-23**. Model and package versions move fast, so
 re-check the sources before the Part that actually wires the model in.
 
----
+> **Runtime verification (added after the spike).** The setup described in
+> [§2](#2-recommended-integration-approach-windows) has now been run for real on
+> this machine: the model was installed in a separate Python 3.12 venv, the
+> service was started on CPU, and a real tool-selection decision was taken over
+> HTTP. Measured startup, latency, memory and the exact request/response are in
+> [`experiments/decider-spike.md`](../experiments/decider-spike.md). Several
+> questions in [Unresolved questions](#unresolved-questions) are answered by
+> that run; they are marked **RESOLVED** below.
 
 ## 1. Verified findings
 
@@ -208,8 +217,11 @@ Everything above came from public, unauthenticated reads.
 - Keeps `torch`/`transformers` out of the backend venv, so `pytest` stays fast
   and the backend image stays small.
 - `serve` loads the model once; the per-decision cost is then a single forward
-  pass (~tens of ms on CPU) instead of paying model load per request, which is
-  what the `ask` CLI would cost.
+  pass instead of paying model load per request, which is what the `ask` CLI
+  would cost. **Measured on this machine (CPU, no GPU): 5.8 s for the first
+  decision in a process and 3.7 s for a repeat** — seconds, not milliseconds.
+  The ~115 ms figure published upstream is an RTX 3090 number and must never be
+  quoted for CPU. See [`experiments/decider-spike.md`](../experiments/decider-spike.md).
 - A local HTTP boundary is also the seam where a hosted endpoint can be swapped
   in later without changing the agent code.
 
@@ -238,6 +250,11 @@ none applies.
 - A `state` string: the user question plus the current agent context.
 - A `questions` object containing one `choice` question whose options are the
   candidate tool ids, plus a `no_action` option.
+- **Every option must carry a description.** The API takes
+  `criteria: {option_id: description}`. The spike showed this is not optional:
+  with descriptions the model chose the right tool at confidence 0.61, and with
+  bare option names it chose a different tool at confidence 0.29. The
+  descriptions are what tell the model *what each tool returns*.
 
 ### Output
 - Exactly one tool id, or `no_action`. No free text — the model does not generate
@@ -255,11 +272,16 @@ none applies.
   tool call.
 
 ### Example decisions
-- *"Compare RELIANCE and TCS over 30 days"* → `compare_symbols`
-- *"What is the average volume for INFY?"* → `price_history`
-- *"Should I buy RELIANCE right now?"* → `no_action` (out of scope: this project
+Against the four bundled demo symbols (`DEMOTECH`, `DEMOBANK`, `DEMOPHARMA`,
+`DEMOENERGY`):
+
+- *"Show me DEMOTECH and tell me how volatile it has been."* → `get_analysis`
+  (verified by the spike: chosen with p = 0.6846, confidence 0.6057)
+- *"What is the average volume for DEMOPHARMA?"* → `get_prices`
+- *"List every demo company."* → `get_symbols`
+- *"Show me the daily returns for DEMOBANK."* → `get_returns`
+- *"Should I buy DEMOTECH right now?"* → `no_action` (out of scope: this project
   does not give investment advice, and trading is not implemented)
-- *"Analyse DEMOTECH"* → `analysis_summary`
 
 ### Reuse guidance
 The pattern is deliberately small: **one choice question, one valid fallback,
@@ -270,32 +292,62 @@ be reusable in another agent without pulling in the rest of this project.
 
 ## Unresolved questions
 
-Marked honestly — these were **not** confirmed during this pass:
+Marked honestly. **RESOLVED** items were answered by the runtime spike
+([`experiments/decider-spike.md`](../experiments/decider-spike.md)); the rest
+were **not** confirmed and still are not.
 
-1. **Native Windows support.** The upstream README documents no native-Windows
-   procedure; WSL2 appears only in the training context. Whether
-   `transformers` 5.15+ can load the Qwen3.5 architecture on Windows CPU is
-   **unverified**.
-2. **Python 3.14 wheels.** Whether `torch>=2.7` and `transformers>=5.15` publish
-   Windows wheels for Python 3.14 is **unverified**. Using Python 3.12 for the
-   Decider venv avoids the question entirely and is the recommended path.
-3. **The `cpu` extra's contents.** The extra is declared but contributes no
-   requirements of its own in the PyPI metadata; what it actually changes is
-   **unverified** (most likely just a CPU torch wheel selection).
-4. **Base model download size and gating.** The exact size of
-   `Qwen/Qwen3.5-2B-Base` and whether the Hub gates it behind an access
-   request is **unverified** — only the licence and revision were checked.
-5. **CPU latency on this machine.** The ~115 ms figure is an RTX 3090 number.
-   Actual CPU latency here is **unverified** and should be measured before any
-   latency claim is made in the Builder Center article. Measuring it is worth
-   bonus points under *"Effective use of Decider 2B"*.
-6. **Transitive dependency licences.** Only the direct `strands-decider`
-   dependencies were reviewed. A full licence sweep of the pinned tree should be
-   run at install time.
-7. **Gemma 4 checkpoints.** The README says Gemma 4 support is not yet on a
-   normal PyPI release and must be installed from the Git repository. Whether
-   that is still true for `0.2.0` is **unverified** — and it does not affect the
-   recommended 2B Qwen3.5 path.
+1. **Native Windows support. — RESOLVED.** It works. `strands-decider[cpu]`
+   installed cleanly on native Windows 11 with Python 3.12.6, and
+   `transformers` 5.20.2 loaded the Qwen3.5 architecture on CPU without any
+   patch. WSL2 is not required for inference.
+2. **Python 3.14 wheels. — STILL UNRESOLVED.** Whether `torch>=2.7` and
+   `transformers>=5.15` publish Windows wheels for Python 3.14 was not tested.
+   It does not matter for us: the Decider venv uses Python 3.12, so the
+   question is avoided entirely.
+3. **The `cpu` extra's contents. — RESOLVED.** It adds no requirements of its
+   own, exactly as the PyPI metadata suggested. The resolved tree contained
+   **no `nvidia-*` packages at all**, and the Windows `torch` wheel is already
+   the CPU build (`2.14.1+cpu`). Installing `[cpu]` documents the intent; it
+   does not change the dependency set.
+4. **Base model download size and gating. — RESOLVED.** `Qwen/Qwen3.5-2B-Base`
+   is **4,571,206,192 B (≈ 4.57 GB)** and is **not** gated behind an access
+   request — it downloaded anonymously. The adapter repo adds 224 MB. Total
+   cache on disk: **4,561.7 MB**. The first run therefore needs ~4.6 GB of
+   disk and one network fetch; every run after that is offline.
+5. **CPU latency on this machine. — RESOLVED.** Measured: **5,826.81 ms** for
+   the first decision in a process, **3,702.23 ms** for a repeat (the server's
+   prefix cache reuses the repeated state prefix), and 5,789.91 ms in a fresh
+   warm-start process. Startup is **253.9 s cold** (including the download) and
+   **28.1 s warm**. Peak server memory: **5,589 MB**. This is the number to
+   quote in the Builder Center article — and note it is the *worst* case, since
+   this machine has no NVIDIA GPU.
+6. **Transitive dependency licences. — STILL UNRESOLVED.** Only the direct
+   `strands-decider` dependencies were reviewed in the research pass. The
+   installed tree was checked for NVIDIA CUDA packages (there are none), but a
+   full licence sweep of the pinned tree has not been run.
+7. **Gemma 4 checkpoints. — STILL UNRESOLVED.** The README says Gemma 4
+   support is not yet on a normal PyPI release and must be installed from the
+   Git repository. Whether that is still true for `0.2.0` was not checked — and
+   it does not affect the recommended 2B Qwen3.5 path.
+8. **Do the option descriptions matter? — RESOLVED, and yes.** The spike asked
+   the same question twice: once through `POST /v1/systemone` (which carries a
+   description for every option) and once through the `ask` CLI (whose
+   `--choice` flag can only carry option *names*). The HTTP call chose
+   `get_analysis` with confidence 0.6057; the CLI, given bare names, chose
+   `get_prices` with confidence 0.2924. The option descriptions are not
+   decoration — they are what makes the choice well-posed. **The tool registry
+   must give every tool a real, specific description.**
+
+### Measured performance (CPU, this machine)
+
+| | |
+|---|---:|
+| Startup, cold (incl. 4.56 GB download) | 253.9 s |
+| Startup, warm (weights on disk) | 28.1 s |
+| Decision, first in a process | 5,826.81 ms |
+| Decision, repeat (prefix cache) | 3,702.23 ms |
+| Peak resident memory | 5,589 MB |
+| Decision cost | 196 input tokens, 1 output token (one slot index) |
 
 ---
 
