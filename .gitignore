@@ -1,0 +1,29 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.aws/
+credentials*
+# Editor / OS
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+# Data (keep folder)
+data/*
+!data/.gitkeep

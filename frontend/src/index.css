@@ -1,0 +1,18 @@
+:root {
+  --bg: #1b1306; --panel: #2b1d0a; --gold: #f2b134; --moss: #6aa84f; --ink: #fdf3dc; --muted: #c9b78f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, "Segoe UI", sans-serif; background: radial-gradient(circle at 50% 0, #3a2810, var(--bg) 60%); color: var(--ink); min-height: 100vh; }
+.page { max-width: 960px; margin: 0 auto; padding: 4rem 1.5rem; }
+.hero { text-align: center; margin-bottom: 3rem; }
+.eyebrow { color: var(--muted); letter-spacing: .15em; text-transform: uppercase; font-size: .8rem; }
+h1 { font-size: clamp(2.5rem, 8vw, 4.5rem); margin: .3rem 0; color: var(--gold); text-shadow: 0 3px 0 #6b4a10; }
+.tagline { font-size: 1.2rem; color: var(--muted); }
+.badge { display: inline-block; margin-top: 1rem; padding: .35rem .9rem; border-radius: 999px; font-size: .85rem; border: 1px solid currentColor; }
+.badge-checking { color: var(--muted); } .badge-online { color: var(--moss); } .badge-offline { color: #e06666; }
+.cards { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.card { background: var(--panel); border: 1px solid #5a3f14; border-radius: 14px; padding: 1.25rem; }
+.card h2 { margin: 0 0 .5rem; color: var(--gold); font-size: 1.2rem; }
+.card p { margin: 0; color: var(--muted); }
+.note { text-align: center; margin-top: 2.5rem; color: var(--muted); font-size: .85rem; }
