@@ -37,7 +37,7 @@ Every command below was run in PowerShell on this machine (Windows 11, x64).
 `$SPIKE` is the experiment directory:
 
 ```powershell
-$SPIKE = "C:\Users\DELL\OneDrive\Desktop\Crezy Dev\Local\MarketQuest-AI\MarketQuest-AI\experiments\decider-spike"
+$SPIKE = "path\to\MarketQuest-AI\experiments\decider-spike"
 ```
 
 ### 2.1 Isolated environment (Python 3.12, separate from the backend venv)
@@ -475,7 +475,7 @@ strands-decider serve  (separate Python 3.12 venv, owns the weights)
 To reproduce from scratch:
 
 ```powershell
-$SPIKE = "C:\Users\DELL\OneDrive\Desktop\Crezy Dev\Local\MarketQuest-AI\MarketQuest-AI\experiments\decider-spike"
+$SPIKE = "path\to\MarketQuest-AI\experiments\decider-spike"
 py -3.12 -m venv "$SPIKE\.venv"
 & "$SPIKE\.venv\Scripts\python.exe" -m pip install "strands-decider[cpu]"
 & "$SPIKE\.venv\Scripts\python.exe" -I "$SPIKE\scripts\run_spike.py"

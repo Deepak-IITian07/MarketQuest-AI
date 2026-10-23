@@ -1,12 +1,17 @@
 fastapi==0.161.0
 uvicorn[standard]==0.54.0
 pydantic-settings==2.16.1
+# Part 4 (Bedrock). The AWS SDK for Python, used for the Converse API on
+# bedrock-runtime. Credentials are never stored here: boto3 resolves them from
+# the ambient chain (environment, shared profile, or an IAM Identity Center
+# session).
+boto3==1.43.118
 # --- dev/test ---
 pytest==9.1.1
 httpx==0.28.1
 # Part 2 added NO new dependencies: the market analysis uses the standard library
 # (csv, statistics, dataclasses, datetime, math).
 #
-# Part 3 (NOT installed yet): strands-decider, strands-agents, boto3.
+# Part 3 (NOT installed here): strands-decider, strands-agents.
 # strands-decider 0.2.0 is Apache-2.0 but pulls in torch>=2.7 and transformers>=5.15.
 # Install it in a SEPARATE venv, not this one -- see docs/decision-pattern.md.

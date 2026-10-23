@@ -2,17 +2,25 @@
 
 Game-inspired stock-market simulation for Indian stocks. Virtual money only; no real trading.
 
-> **Status: Part 3 (Decider half) complete.** The Strands Decider 2B service now
-> makes a real tool-selection decision for market questions, over local HTTP.
+> **Status: the agent is built. The Decider half is verified against the real
+> model; the Bedrock half is implemented and tested with mocks but has never
+> made a live AWS call.**
 >
 > **Working now:** the FastAPI `/health` and `/market/*` endpoints, a React
 > market dashboard that reads them, and `POST /agent/decide`, which asks the
-> Decider which market tool to run and then runs that tool.
+> Strands Decider 2B which market tool to run, runs that tool, and then asks
+> Amazon Bedrock to explain the numbers it produced.
 >
-> **Proven but not wired in:** Amazon Bedrock. The plan is in
-> [`docs/bedrock-research.md`](docs/bedrock-research.md); no AWS call has been
-> made and the account-side setup is still outstanding. See
-> [§11](#11-amazon-bedrock-readiness-research-only).
+> **Live and verified:** the Decider's tool selection. The model was run for
+> real, over local HTTP, and its decisions are recorded in
+> [`experiments/decider-spike.md`](experiments/decider-spike.md).
+>
+> **Implemented but not live:** Amazon Bedrock. The code, the prompts and the
+> error handling are done and covered by 38 mocked tests, but this machine has
+> no AWS profile, so **no AWS call has ever been made**. Until an AWS account
+> is configured, `/agent/decide` returns the real market data with
+> `explanation_status: "unavailable"` and says why. See
+> [§11](#11-amazon-bedrock-implemented-not-yet-live).
 >
 > **Not built yet:** virtual trading, portfolio management, AWS deployment, and
 > a frontend chat interface.
@@ -25,10 +33,10 @@ Hackathon tags: `#strands-decider-2b` `#tool-selection`
 
 | Path | Purpose |
 |---|---|
-| `backend/` | FastAPI app. `main.py` entry; `app/api` routes, `app/core` config, `app/schemas` models, `app/services` logic, `app/agent` the Decider client + tool allowlist, `tests/` pytest |
+| `backend/` | FastAPI app. `main.py` entry; `app/api` routes, `app/core` config, `app/schemas` models, `app/services` logic, `app/agent` the Decider client, the tool allowlist and the Bedrock explanation layer, `tests/` pytest |
 | `frontend/` | React + TypeScript + Vite. `src/pages/Dashboard.tsx`, `src/components/`, `src/services/api.ts` (API client), `src/types/`, `src/utils/format.ts` |
 | `data/` | Local **synthetic** sample stock data (`sample_prices.csv`) + the generator script that produced it |
-| `docs/` | `architecture.md`, `decision-pattern.md` (Decider research + tool-selection pattern), `bedrock-research.md` (Bedrock integration plan), `HANDOFF.md` (state of play and next task) |
+| `docs/` | `architecture.md`, `decision-pattern.md` (Decider research + tool-selection pattern), `bedrock-research.md` (Bedrock integration: research + what was built), `HANDOFF.md` (state of play and next task) |
 | `experiments/` | `decider-spike.md` — the measured Decider 2B runtime spike, plus the scripts that produced it |
 
 ## 1. Required tools
@@ -73,7 +81,7 @@ Copy-Item .env.example .env
 ## 5. Environment variables
 - `backend/.env` and `frontend/.env` are git-ignored. Only `.env.example` files are committed.
 - **Never** put AWS keys or secrets in `frontend/.env`: Vite bundles those into browser code.
-- AWS values in `backend/.env` are empty placeholders for later parts. Prefer an AWS profile/SSO over raw keys.
+- AWS values in `backend/.env` name a **profile**, not a key. `boto3` resolves the credential itself from the ambient chain (environment, shared profile, or an IAM Identity Center session). See [§11](#11-amazon-bedrock-implemented-not-yet-live).
 
 ## 6. Run
 Backend, from `backend\` with venv active:
@@ -96,7 +104,7 @@ Then open **http://localhost:5173**.
 
 Optional checks:
 ```powershell
-# backend\, venv active  -> 67 tests, all passing
+# backend\, venv active  -> 105 tests, all passing
 pytest
 # frontend\  -> type-checks then builds to frontend/dist
 npm run build
@@ -295,13 +303,29 @@ The response carries the model's own reasoning, not just its answer:
     "kind": "analysis",
     "data": { "symbol": "DEMOTECH", "sma": 1447.1035, "volatility": { "...": "..." } }
   },
+  "explanation": "DEMOTECH closed at 1447.10, which is about 2.3% above its 20-session average of 1414.67. Daily volatility is 1.82% (29.4% annualised) over the 29 returns in the sample, and the total return across the 30 sessions is 6.41%. These figures come from synthetic demo data, not a real market feed.",
+  "explanation_status": "generated",
+  "explanation_error": null,
+  "bedrock": {
+    "model_id": "global.anthropic.claude-haiku-5-5",
+    "region": "ap-south-1",
+    "stop_reason": "end_turn",
+    "input_tokens": 412,
+    "output_tokens": 57,
+    "latency_ms": 1180.4
+  },
   "data_source": "synthetic_demo",
   "disclaimer": "Synthetic demo data generated locally for development. Not real market data."
 }
 ```
 
-`GET /agent/status` reports whether the service is reachable and what it is
-serving.
+The `explanation` field above is illustrative — it shows the shape of a real
+response. **On a machine with no AWS profile the endpoint still returns `200`
+with the full market data**, and `explanation_status` is `"unavailable"` with
+`explanation` set to `null`. See [§11](#11-amazon-bedrock-implemented-not-yet-live).
+
+`GET /agent/status` reports whether the Decider service is reachable and what
+it is serving, and whether Bedrock is configured.
 
 #### The tools the model may choose
 
@@ -390,7 +414,8 @@ Full report with exact commands and verbatim responses:
 - A decision takes 6–9 s on CPU, so a caller must show a waiting state.
 - The model is a **decision head, not a text generator**. It returns a choice
   and calibrated probabilities; it never writes a sentence. Explaining the
-  numbers in words is Bedrock's job, and that is not built yet.
+  numbers in words is Bedrock's job, and that half is implemented but has not
+  yet run against a live AWS account — see [§11](#11-amazon-bedrock-implemented-not-yet-live).
 - The Decider must be started separately. If it is not running, `/agent/decide`
   returns `503` rather than falling back to a rule-based guess.
 - The `state` prefix is rebuilt per question, so the service's prefix cache
@@ -398,30 +423,117 @@ Full report with exact commands and verbatim responses:
 
 ---
 
-## 11. Amazon Bedrock readiness (research only)
+## 11. Amazon Bedrock (implemented, not yet live)
 
-Nothing is implemented. [`docs/bedrock-research.md`](docs/bedrock-research.md)
-is the plan: supported SDK, IAM permissions, model access checks, profile/SSO
-authentication, a minimal request/response example, and the division of labour
-between the Decider (chooses the tool) and Bedrock (explains the results).
+The **Decider chooses the tool; Bedrock explains the numbers.** That split is
+enforced by the code, not by convention: the Bedrock layer is never given a
+list of tools to choose from, and it only ever receives results the backend
+has already computed.
 
-The Decider half of that split is now live — the Decider chooses the tool
-([§10.2](#102-post-agentdecide--the-model-picks-the-tool)). The Bedrock half
-is not: **no AWS call has been made and no credential has been read, printed,
-or created.** The account-side setup below is still outstanding.
+**The integration is written and tested. It has never made a live AWS call**,
+because this machine has no AWS profile — see the blockers below. Until an
+account is set up, `/agent/decide` still works: it returns the real market
+data, and `explanation_status` says what happened.
 
-### Blockers before Bedrock can work
+### How it works
+
+```
+POST /agent/decide
+   -> app/agent/decider.py     the Decider picks a tool name        (LIVE)
+   -> app/agent/tools.py       the allowlist of read-only operations
+   -> app/agent/runner.py      run the tool, get the numbers
+   -> app/services/market_queries.py   the same builders /market uses
+   -> app/agent/explainer.py   build a bounded payload + the prompt
+   -> app/services/bedrock.py  Converse API on bedrock-runtime      (NOT LIVE)
+```
+
+The prompt is a `system` block (role and hard constraints) plus a `user`
+block carrying the computed result as JSON. Three things keep the model
+honest:
+
+- **It never produces a number.** The payload carries the figures the backend
+  already computed, and the model is told not to recompute, convert or extend
+  them. Percentages are converted to percentages *in the backend*, once, so
+  the model only ever quotes a number.
+- **The series is bounded.** All 30 daily rows exist in the backend, but only
+  the first 8 and last 8 are sent, and the payload says so — so the model
+  cannot describe a row it was not given.
+- **It cannot give advice.** The system prompt forbids recommendations, price
+  targets and predictions, and requires the synthetic-data warning to be
+  stated.
+
+### The response
+
+`POST /agent/decide` gains three fields and one object. Everything else,
+including the Decider's probabilities and confidence, is unchanged.
+
+| Field | Meaning |
+|---|---|
+| `explanation` | The Bedrock text. Present **only** when the status is `generated`. |
+| `explanation_status` | `generated`, `skipped`, `disabled`, `unavailable` or `failed`. |
+| `explanation_error` | Why there is no explanation, when the status is not `generated`. |
+| `bedrock` | The model id, region, stop reason and token counts. Present only on success. |
+
+**A Bedrock failure never fails the request and never produces a fabricated
+explanation.** The decision and the market data are real whatever the
+explanation layer does.
+
+| `explanation_status` | Cause | Was a call made? |
+|---|---|---|
+| `generated` | It worked. | yes |
+| `skipped` | The caller sent `"explain": false`, or the Decider chose `no_action` and there is nothing to explain. | **no** — nothing is charged |
+| `disabled` | `BEDROCK_ENABLED=false`. | no |
+| `unavailable` | Bedrock could not be used: no credentials, unknown model, or access denied. | no successful call |
+| `failed` | Throttled, timed out, service error, or a response that was not in the documented shape. | yes |
+
+Error messages are written by hand rather than taken from the AWS exception,
+so request ids and internal detail are never echoed to the caller.
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AWS_REGION` | `ap-south-1` | The region to call. |
+| `AWS_PROFILE` | *(empty)* | The AWS profile or SSO profile to use. **A profile name, not a credential.** Empty means "use the ambient chain". |
+| `BEDROCK_MODEL_ID` | `global.anthropic.claude-haiku-5-5` | The model or inference profile to call. |
+| `BEDROCK_TIMEOUT_SECONDS` | `30` | How long to wait for an explanation. |
+| `BEDROCK_MAX_TOKENS` | `600` | Upper bound on the explanation length. |
+| `BEDROCK_TEMPERATURE` | `0.2` | Low, because this is a factual summary, not creative writing. |
+| `BEDROCK_ENABLED` | `true` | Set to `false` to turn the explanation layer off. |
+
+> **The `global.` prefix matters.** In `ap-south-1` the Claude 5.5 models are
+> available through the **Global** cross-region inference profile only — not
+> in-region, and not through a geo profile. A bare `anthropic.claude-haiku-5-5`
+> will not route from that region.
+
+### Blockers before it can be live
 
 | # | Blocker | Who does it |
 |---|---|---|
 | 1 | **No AWS profile or SSO configured.** The AWS CLI is not installed, and neither `%USERPROFILE%\.aws\config` nor `credentials` exists on this machine. | You |
-| 2 | **No IAM policy granting `bedrock:Converse`** (plus the read-only discovery actions) to the profile's role. Least-privilege example is in the research doc. | You |
+| 2 | **No IAM policy** granting `bedrock:Converse` and `bedrock:InvokeModel` (plus the read-only discovery actions) to the profile's role. Least-privilege example is in the research doc. | You |
 | 3 | **Anthropic first-time-use form** not yet submitted for the account. Until it is, invocations return `AccessDeniedException`. | You |
-| 4 | **Region choice.** For an India-focused project `ap-south-1` is natural — but Claude 5.5 models there support **Global inference only**, so `modelId` must be `global.anthropic.claude-haiku-5-5`, not `us.…`. | You |
+| 4 | **Region choice.** `ap-south-1` is natural for an India-focused project — but see the `global.` prefix note above. | You |
 | 5 | **Model access not verified.** `get-foundation-model-availability` has not been run, because it needs a working profile. | You, then us |
 
-Set `AWS_REGION`, `AWS_PROFILE` and `BEDROCK_MODEL_ID` in `backend/.env` once
-the above are done — those placeholders already exist.
+The research, the IAM policy, the model-access checks and the full
+request/response reference are in
+[`docs/bedrock-research.md`](docs/bedrock-research.md) §10.
+
+### What has and has not been tested
+
+**Tested with mocks.** 38 tests cover the exact Converse request shape, a
+successful response, seven malformed responses, and the AWS failures
+(missing credentials, access denied, unknown model, throttling, read timeout,
+connect timeout, unreachable endpoint, unrecognised error). The AWS boundary
+is a fake `bedrock-runtime` client; the **real** `BedrockClient` sits in front
+of it, so request building, response parsing and error mapping all run. The
+fixture is autouse, so no test in the suite can reach AWS or incur a charge.
+
+**Not tested live.** Whether the account's IAM policy allows `Converse`,
+whether the first-time-use form has been submitted, whether the model is
+enabled in `ap-south-1`, and the real latency and token cost. A live call
+would exercise all four.
 
 ---
 
@@ -446,15 +558,21 @@ the above are done — those placeholders already exist.
 | `/agent/decide` returns 503 `decider_timeout` | The service did not answer in `DECIDER_TIMEOUT_SECONDS` (default 15). A cold first decision can take ~6 s, so raise the timeout if the machine is loaded |
 | The backend refuses to start with a `decider_base_url` error | `DECIDER_BASE_URL` must be a loopback address. The Decider has no authentication, so a remote host is refused on purpose |
 | `/agent/status` says `decider_reachable: false` | The service is down or still starting (about 28 s). It is the pre-flight check to run before a demo |
+| `/agent/decide` returns `explanation_status: "unavailable"` | Bedrock could not be used — usually no AWS credentials. The market data is still correct. See [§11](#11-amazon-bedrock-implemented-not-yet-live) |
+| `explanation_status: "failed"` | A Bedrock call was made and did not return a usable explanation (throttled, timed out, or a malformed response). `explanation_error` says which. The market data is still correct |
+| `explanation_status: "skipped"` | Either `"explain": false` was sent, or the Decider chose `no_action`. Neither makes a Bedrock call, so neither costs anything |
+| `ModuleNotFoundError: boto3` | The backend venv is missing the AWS SDK. Run `pip install -r requirements.txt` from `backend/` |
+| Bedrock returns `AccessDeniedException` | The profile's role lacks `bedrock:Converse`/`bedrock:InvokeModel`, the Anthropic first-time-use form has not been submitted, or the model is not enabled in the region |
 
 ## 13. Git + GitHub
 The repo is already initialised and connected to `origin/main`
-(`main` → `origin/main`, up to date). To commit the current work:
+(`main` → `origin/main`, up to date as of the last commit). To commit the
+current work:
 
 ```powershell
 git add -A
 git status          # confirm no .env, .venv, node_modules or model weights are listed
-git commit -m "Add market dashboard, Decider 2B spike and Bedrock research"
+git commit -m "Add the Amazon Bedrock explanation layer for /agent/decide"
 git push
 ```
 
@@ -478,3 +596,26 @@ installed `strands-decider` 0.2.0 and ran the model. Full findings, the exact
 model revision, the measured performance and the open questions are in
 [`docs/decision-pattern.md`](docs/decision-pattern.md) and
 [`experiments/decider-spike.md`](experiments/decider-spike.md).
+
+Part 4 added **`boto3` (Apache-2.0)**, the AWS SDK for Python.
+
+### Licensing questions that are still open
+
+Stated plainly, because they are not all settled:
+
+- **The full dependency tree has not been swept.** Each direct dependency's
+  licence was checked individually; the licences of every transitive
+  dependency of `boto3` and `uvicorn[standard]` have not been enumerated.
+- **The Bedrock model terms have not been verified.** The Claude models are
+  offered through AWS Marketplace under a provider EULA that is separate from
+  the Apache-2.0 licensing of the open-weight models used here. Read the
+  EULA in your account before shipping anything built on it.
+- **The Strands Decider 2B adapter's own licence was confirmed Apache-2.0**,
+  but the model card's terms were not read line by line.
+- **The IAM action needed for the Converse API is ambiguous in AWS's own
+  documentation** — `bedrock:Converse` and `bedrock:InvokeModel` are each
+  named in different places, so the project grants both. This is an IAM
+  question, not a licence question, but it is unresolved in the same way.
+
+Nothing here is legal advice, and no licence claim is made beyond what the
+sources above actually say.

@@ -1,6 +1,9 @@
 # Amazon Bedrock integration research (MarketQuest AI)
 
-**Status: research only. Nothing is implemented, and no AWS call was made.**
+**Status: the integration is implemented and covered by mocked tests. No live
+AWS call has been made, and no credential has been read, printed or created.**
+What was built is in [§10](#10-what-was-implemented); the account-side setup
+that is still outstanding is in [§8](#8-what-the-operator-must-do-first).
 
 Scope: how a Python FastAPI backend would call a **generative** model on Amazon
 Bedrock to turn market-analysis results into a written explanation.
@@ -643,10 +646,15 @@ automated agent. All steps are the account owner's.
 ## 9. Unverified / open questions
 
 1. **Whether `bedrock:InvokeModel` alone grants Converse.** The Service
-   Authorization Reference lists `bedrock:Converse` as a separate action, but
-   the User Guide's Deny-policy example says denying `InvokeModel` also blocks
-   `Converse`. The Allow-side requirement was **not** confirmed experimentally.
-   Recommendation: grant `bedrock:Converse` explicitly. Unverified.
+   Authorization Reference lists `bedrock:Converse` as a separate action, the
+   Converse API reference states *"This operation requires permission for the
+   `bedrock:InvokeModel` action"*, and the User Guide's Deny-policy example
+   says denying `InvokeModel` also blocks `Converse`. The docs therefore name
+   **both** actions, and the Allow-side requirement was **not** confirmed
+   experimentally. Recommendation: grant `bedrock:Converse` **and**
+   `bedrock:InvokeModel` on the model and the inference profile. Unverified —
+   a single `Converse` call after the account setup will name whichever
+   action is missing.
 2. **This account's Bedrock status.** Whether the target account has Bedrock
    enabled, which models it has access to, and whether the Anthropic FTU form
    has been submitted — **all unknown**, because no AWS call was made and no
@@ -667,11 +675,129 @@ automated agent. All steps are the account owner's.
 
 ---
 
-## 10. Sources
+## 10. What was implemented
 
-All read from official AWS documentation on 2026-10-23.
+**The integration is built and covered by mocked tests. No live AWS call has
+been made.** The code follows this document, and the Converse request and
+response shapes were re-read against the AWS API reference on 2026-10-23
+before the code was written.
+
+### The files
+
+| File | What it does |
+|---|---|
+| `backend/app/services/bedrock.py` | The Bedrock client. Builds the Converse request, parses the response, and maps every AWS failure onto a typed error. `boto3` is imported lazily, so the backend still starts without it. |
+| `backend/app/agent/explainer.py` | Builds the bounded payload and the prompt, calls the client, and maps its errors onto the two statuses the API reports. |
+| `backend/app/api/agent.py` | `POST /agent/decide` now asks for an explanation after the tool has run, and reports what happened. `GET /agent/status` reports Bedrock readiness. |
+| `backend/app/core/config.py` | `AWS_REGION`, `AWS_PROFILE`, `BEDROCK_MODEL_ID`, `BEDROCK_TIMEOUT_SECONDS`, `BEDROCK_MAX_TOKENS`, `BEDROCK_TEMPERATURE`, `BEDROCK_ENABLED`. |
+| `backend/tests/test_bedrock.py` | 38 mocked tests. `backend/tests/conftest.py` installs a fake `bedrock-runtime` client for the **whole suite**, so no test can reach AWS. |
+
+`boto3==1.43.118` is the one new dependency. Nothing else was added, and no
+existing dependency was upgraded.
+
+### The contract, in code
+
+The division of labour in [§7](#7-division-of-labour-decider-decides-bedrock-explains)
+is enforced by the shape of the code, not by convention:
+
+- `app/agent/tools.py` is the allowlist. Only the Decider's choice reaches it,
+  and only the name is looked up.
+- The tool runs through `app/services/market_queries.py`, the same builders the
+  `/market` endpoints use. Bedrock is not in that path.
+- `app/agent/explainer.py` receives the **already-computed** response model. It
+  cannot reach a tool registry, and it is never given a list of tools to pick
+  from.
+
+### What the model is given
+
+The prompt is a `system` block (the role and the hard constraints) plus a
+`user` block carrying the computed result as JSON. Two details are worth
+stating, because they are what stop the model from getting a number wrong:
+
+1. **The units are pre-converted.** Volatility and the daily returns are
+   stored as decimal fractions, and `total_return_pct` is already a
+   percentage. The payload converts the fractions to percentages **once, in
+   the backend**, and names every such field `*_pct`. The model quotes a
+   number; it never converts one. This is the one place the backend does
+   arithmetic, and it is a unit conversion, not a new statistic.
+2. **The series is bounded.** The backend holds all 30 daily rows, but only
+   the first 8 and the last 8 are sent, and the payload says so: *"Showing the
+   first 8 and last 8 of 30 rows. The rows in between were not provided, so do
+   not describe them."* The model cannot describe a row it was not given.
+
+The system prompt also states that the data is synthetic, forbids investment
+advice and predictions, and says to call a missing figure unavailable rather
+than guess.
+
+### What the API returns
+
+`POST /agent/decide` gains three fields and one object. The existing fields,
+including the Decider's probabilities and confidence, are unchanged.
+
+| Field | Meaning |
+|---|---|
+| `explanation` | The Bedrock text. Present **only** when the status is `generated`. |
+| `explanation_status` | `generated`, `skipped`, `disabled`, `unavailable` or `failed`. |
+| `explanation_error` | Why there is no explanation, when the status is not `generated`. |
+| `bedrock` | The model id, region, stop reason and token counts. Present only on success. |
+
+### When Bedrock cannot do its job
+
+**A Bedrock failure never fails the request and never produces a fabricated
+explanation.** The decision and the market data are real whatever the
+explanation layer does, so the request still succeeds and the failure is
+reported in its own field.
+
+| Status | Cause | HTTP status |
+|---|---|---|
+| `generated` | The call succeeded. | `200` |
+| `skipped` | The caller passed `"explain": false`, or the Decider chose `no_action` and there is nothing to explain. **No call is made**, so nothing is charged. | `200` |
+| `disabled` | `BEDROCK_ENABLED=false`. | `200` |
+| `unavailable` | Bedrock could not be used at all: `boto3` is missing, no credentials resolved, the profile was not found, the model is unknown in this region, or access was denied. **No request succeeded.** | `200` |
+| `failed` | A request was made and did not produce a usable explanation: throttled, timed out, the service was unavailable, or the response was not in the documented shape. | `200` |
+
+The error messages are written by hand rather than taken from the AWS
+exception, so whatever the SDK put in the message — request ids, internal
+detail — is never echoed to the caller. There is a test that asserts this.
+
+### What was tested, and what was not
+
+**Tested with mocks.** 38 new tests, 105 in total, all passing. The AWS
+boundary is a fake `bedrock-runtime` client; the *real* `BedrockClient` sits
+in front of it, so the request building, the response parsing and the error
+mapping all run for real. The tests cover: the exact Converse request shape;
+a successful response and its usage figures; seven malformed responses; and
+missing credentials, access denied, an unknown model, throttling, a read
+timeout, a connect timeout, an unreachable endpoint, and an unrecognised
+error. On the endpoint side they cover: the explanation being returned, the
+Decider's metadata being preserved, `unavailable` and `failed` producing no
+text at all, `explain: false` and `no_action` making **no** call at all, and
+all four tool kinds being explainable.
+
+**Not tested with a live call.** No AWS request has been made, because no
+credential exists on this machine and the brief requires approval before a
+billable call. The parts that a live call would exercise, and that the mocks
+cannot cover, are: whether the account's IAM policy allows `Converse`, whether
+the Anthropic first-time-use form has been submitted, whether the model is
+enabled in `ap-south-1`, and the real latency and token cost.
+
+### Outstanding AWS-side actions
+
+Still the account owner's, exactly as in [§8](#8-what-the-operator-must-do-first).
+The code is ready for them: once a profile resolves and the model is enabled,
+`POST /agent/decide` starts returning an explanation with no further change.
+
+---
+
+## 11. Sources
+
+All read from official AWS documentation on 2026-10-23. The Converse API
+reference and the Claude Haiku 5.5 model card were **re-read on 2026-10-23**
+before the implementation, to confirm the request shape, the response shape,
+the model ids and the `ap-south-1` availability that this document relies on.
 
 - Bedrock quick start (client creation, Converse example) — https://docs.aws.amazon.com/bedrock/latest/userguide/getting-started.html
+- Converse API reference (request syntax, response syntax, error codes) — https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
 - Inference using the Converse API — https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.md
 - Models at a glance — https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
 - Anthropic model cards — https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-anthropic.md

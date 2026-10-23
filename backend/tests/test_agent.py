@@ -6,81 +6,18 @@ exercised without loading the model or running any inference. The tests that
 need the genuine model live in `experiments/decider-spike.md`.
 """
 
-import json
-
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.agent.decider import DeciderClient
-from app.api.agent import get_decider_client
 from app.core.config import Settings
 from main import app
+from tests.helpers import decider_body
 
 client = TestClient(app)
 
 QUESTION = "Tell me how volatile DEMOTECH has been."
-
-
-def decider_body(choice: str = "get_analysis", **answer_overrides) -> dict:
-    """A `SystemOneResponse` body in the shape the service actually returns."""
-    answer = {
-        "type": "choice",
-        "choice": choice,
-        "probabilities": {
-            "get_symbols": 0.003,
-            "get_prices": 0.2234,
-            "get_analysis": 0.6846,
-            "get_returns": 0.085,
-            "no_action": 0.004,
-        },
-        "confidence": 0.6057,
-    }
-    answer.update(answer_overrides)
-    return {
-        "model": "strands-decider-2B-qwen3.5-v1-2610",
-        "answers": {"next_tool": answer},
-        "usage": {"input_tokens": 196, "output_tokens": 1},
-        "latency_ms": 5826.81,
-    }
-
-
-class DeciderMock:
-    """Records the requests the backend made and replays a canned answer."""
-
-    def __init__(self) -> None:
-        self.requests: list[httpx.Request] = []
-        self.response: httpx.Response | None = None
-        self.raises: Exception | None = None
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        if self.raises is not None:
-            raise self.raises
-        assert self.response is not None
-        return self.response
-
-    def reply(self, body: dict) -> None:
-        self.response = httpx.Response(200, json=body)
-
-    def request_body(self, index: int = 0) -> dict:
-        return json.loads(self.requests[index].content)
-
-
-@pytest.fixture()
-def decider():
-    """Install a mocked Decider in place of the real one."""
-    mock = DeciderMock()
-    transport = httpx.MockTransport(mock.handler)
-    mocked_client = DeciderClient(
-        base_url="http://127.0.0.1:8100",
-        timeout=5.0,
-        client=httpx.Client(transport=transport, timeout=5.0),
-    )
-    app.dependency_overrides[get_decider_client] = lambda: mocked_client
-    yield mock
-    app.dependency_overrides.clear()
 
 
 # --- a successful decision -------------------------------------------------

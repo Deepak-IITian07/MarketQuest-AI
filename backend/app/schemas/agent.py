@@ -30,6 +30,13 @@ class AgentRequest(BaseModel):
         max_length=32,
         description="The symbol the question is about, if it is already known.",
     )
+    explain: bool = Field(
+        default=True,
+        description=(
+            "Whether Amazon Bedrock should explain the result. Set it to false "
+            "to run the tool without a Bedrock call."
+        ),
+    )
 
 
 class DecisionMetadata(BaseModel):
@@ -86,6 +93,19 @@ ToolResult = Annotated[
 ]
 
 
+class BedrockMetadata(BaseModel):
+    """What the Bedrock call reported about itself."""
+
+    model_id: str = Field(..., description="The model or inference profile that was called.")
+    region: str = Field(..., description="The AWS region the call went to.")
+    stop_reason: str | None = Field(
+        default=None, description="Why the model stopped generating."
+    )
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    latency_ms: float | None = None
+
+
 class AgentDecisionResponse(BaseModel):
     """A completed decision, and the market data it produced."""
 
@@ -104,6 +124,32 @@ class AgentDecisionResponse(BaseModel):
     data_source: str = DATA_SOURCE
     disclaimer: str = DATA_DISCLAIMER
     note: str | None = None
+    explanation: str | None = Field(
+        default=None,
+        description=(
+            "The Bedrock explanation of the result. Present only when "
+            "explanation_status is 'generated'."
+        ),
+    )
+    explanation_status: Literal[
+        "generated", "skipped", "disabled", "unavailable", "failed"
+    ] = Field(
+        default="skipped",
+        description=(
+            "Why the explanation is or is not there: 'generated', 'skipped' "
+            "(not requested, or nothing to explain), 'disabled' (Bedrock is "
+            "turned off in the configuration), 'unavailable' (Bedrock could "
+            "not be used, so no call was made) or 'failed' (a call was made "
+            "and did not produce an explanation)."
+        ),
+    )
+    explanation_error: str | None = Field(
+        default=None,
+        description="Why no explanation was generated, when the status is not 'generated'.",
+    )
+    bedrock: BedrockMetadata | None = Field(
+        default=None, description="What the Bedrock call reported about itself."
+    )
 
 
 class AgentDecisionError(BaseModel):
@@ -137,4 +183,23 @@ class AgentStatusResponse(BaseModel):
     device: str | None = None
     num_slots: int | None = None
     max_length: int | None = None
+    bedrock_enabled: bool = Field(
+        default=False, description="Whether the Bedrock explanation layer is on."
+    )
+    bedrock_model_id: str | None = None
+    bedrock_region: str | None = None
+    bedrock_profile: str | None = Field(
+        default=None,
+        description=(
+            "The name of the AWS profile the Bedrock client will use. This is "
+            "a profile name, not a credential."
+        ),
+    )
+    bedrock_credentials_found: bool | None = Field(
+        default=None,
+        description=(
+            "Whether AWS credentials could be resolved. Null when it could not "
+            "be determined."
+        ),
+    )
     note: str

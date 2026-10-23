@@ -4,7 +4,9 @@
 to end on this machine, and the Decider is now integrated into the backend.**
 `POST /agent/decide` asks the model which market tool to run and then runs that
 tool — see [§10 of the README](../README.md#102-post-agentdecide--the-model-picks-the-tool).
-Bedrock, which explains the numbers the tool produced, is still not built.
+The Bedrock layer that explains the numbers the tool produced is implemented and
+mock-tested, but has never made a live AWS call — see
+[`bedrock-research.md`](bedrock-research.md) §10.
 
 This file has two parts:
 
@@ -242,7 +244,7 @@ backend needs to import it, the venv split has to be revisited deliberately.
 
 ---
 
-## 3. The decision pattern (planned, not yet implemented)
+## 3. The decision pattern (implemented in Part 3)
 
 **Purpose:** given a user's stock question and a structured list of analysis
 tools, select the next appropriate tool, or a valid **no-action** option when
@@ -264,14 +266,27 @@ none applies.
 
 ### Fallback / validation
 - The chosen tool must be a member of the offered option set. Anything else is
-  rejected and the agent falls back to `no_action`.
-- If the Decider server is unreachable or times out, fall back to a
-  deterministic rule (or `no_action`) and record that the decision was not made
-  by the model. **Never fake a Decider decision.**
-- The Decider's confidence is advisory only. Per the upstream README, treat
-  low-confidence decisions as "confirm or ask a person" — so the pattern should
-  route low-confidence cases to Bedrock for a clarifying explanation, not to a
-  tool call.
+  rejected and **never executed**.
+- If the Decider server is unreachable or times out, the request fails with a
+  stated reason (`decider_unavailable`, `decider_timeout`). **There is no
+  rule-based fallback and no fabricated decision** — the response says in
+  words that the model did not make a usable decision, and
+  `"decision_made"` is `false`.
+- The Decider's confidence is advisory only, and the upstream README suggests
+  treating low-confidence decisions as "confirm or ask a person". **That
+  routing is not implemented**: a valid tool choice is executed whatever its
+  confidence, and the confidence is reported so the caller can decide. Routing
+  low-confidence cases to Bedrock for a clarifying explanation would be a
+  natural next step, and Bedrock's explanation layer is now in place to
+  support it.
+
+### What the implementation actually does
+
+`backend/app/agent/tools.py` holds the allowlist and the per-option
+descriptions; `backend/app/agent/runner.py` sends the question, checks the
+answer against the allowlist, and runs the tool through the same builders the
+`/market` routes use. The failure reasons above are the ones in
+`backend/app/api/agent.py` and are covered by `backend/tests/test_agent.py`.
 
 ### Example decisions
 Against the four bundled demo symbols (`DEMOTECH`, `DEMOBANK`, `DEMOPHARMA`,

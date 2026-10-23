@@ -19,6 +19,14 @@ DEFAULT_DECIDER_BASE_URL = "http://127.0.0.1:8100"
 #: The exact checkpoint verified in `experiments/decider-spike.md`.
 DEFAULT_DECIDER_MODEL = "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610"
 
+#: The region for an India-focused project.
+DEFAULT_AWS_REGION = "ap-south-1"
+
+#: Claude Haiku 5.5 in `ap-south-1` is available through the **Global**
+#: cross-region inference profile only, so the id carries the `global.` prefix.
+#: The bare base model id is not routable from that region.
+DEFAULT_BEDROCK_MODEL_ID = "global.anthropic.claude-haiku-5-5"
+
 
 class Settings(BaseSettings):
     # `env_ignore_empty` means a blank value in .env falls back to the default
@@ -37,10 +45,20 @@ class Settings(BaseSettings):
     data_dir: str = str(DEFAULT_DATA_DIR)
     sample_prices_file: str = "sample_prices.csv"
 
-    # Reserved for later parts. Unused in Part 1; no credentials are read or required.
-    aws_region: str = ""
+    # Amazon Bedrock. The Decider chooses the tool; Bedrock explains the
+    # numbers the tool produced. Credentials are never stored here -- boto3
+    # resolves them from the ambient chain, and `aws_profile` only names a
+    # profile.
+    aws_region: str = DEFAULT_AWS_REGION
     aws_profile: str = ""
-    bedrock_model_id: str = ""
+    bedrock_model_id: str = DEFAULT_BEDROCK_MODEL_ID
+    bedrock_timeout_seconds: float = 30.0
+    bedrock_max_tokens: int = 600
+    bedrock_temperature: float = 0.2
+
+    # Set to false to turn the explanation layer off entirely, for instance
+    # while working on the Decider half with no AWS account configured.
+    bedrock_enabled: bool = True
 
     # The local Strands Decider 2B service. It runs in its own Python 3.12
     # environment (see `experiments/decider-spike/`) and is reached over plain
@@ -88,6 +106,31 @@ class Settings(BaseSettings):
         if v <= 0:
             raise ValueError(
                 f"decider_timeout_seconds must be greater than zero, got {v}."
+            )
+        return v
+
+    @field_validator("bedrock_timeout_seconds")
+    @classmethod
+    def _validate_bedrock_timeout(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(
+                f"bedrock_timeout_seconds must be greater than zero, got {v}."
+            )
+        return v
+
+    @field_validator("bedrock_max_tokens")
+    @classmethod
+    def _validate_bedrock_max_tokens(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"bedrock_max_tokens must be greater than zero, got {v}.")
+        return v
+
+    @field_validator("bedrock_temperature")
+    @classmethod
+    def _validate_bedrock_temperature(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(
+                f"bedrock_temperature must be between 0 and 1, got {v}."
             )
         return v
 

@@ -1,5 +1,5 @@
 {
-  "command": "C:\\Users\\DELL\\OneDrive\\Desktop\\Crezy Dev\\Local\\MarketQuest-AI\\MarketQuest-AI\\experiments\\decider-spike\\.venv\\Scripts\\strands-decider.exe serve StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --host 127.0.0.1 --port 8100 --device cpu",
+  "command": "experiments/decider-spike/.venv/Scripts/strands-decider.exe serve StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --host 127.0.0.1 --port 8100 --device cpu",
   "checkpoint": "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610",
   "device": "cpu",
   "port": 8100,

@@ -7,6 +7,12 @@ from the same services the plain `/market` endpoints use.
 If the model cannot be reached, times out, or names something that is not on
 the allowlist, the request fails with an explicit reason. No tool choice is
 ever invented, and no result is ever fabricated.
+
+Once the tool has run, Amazon Bedrock explains the numbers it produced. That
+is the whole of Bedrock's job: it never picks the tool and never supplies a
+figure. A Bedrock failure is reported in the response body with its own
+status, and the request still succeeds with the real market data -- because
+the data is real whether or not the explanation could be written.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from app.agent import runner, tools
+from app.agent import explainer, runner, tools
 from app.agent.decider import (
     DeciderChoice,
     DeciderClient,
@@ -26,6 +32,7 @@ from app.agent.decider import (
     DeciderTimeoutError,
     DeciderUnavailableError,
 )
+from app.agent.explainer import ExplanationError
 from app.agent.runner import AgentError
 from app.core.config import get_settings
 from app.schemas.agent import (
@@ -34,6 +41,7 @@ from app.schemas.agent import (
     AgentRequest,
     AgentStatusResponse,
     AnalysisResult,
+    BedrockMetadata,
     DecisionMetadata,
     PricesResult,
     ReturnsResult,
@@ -41,6 +49,7 @@ from app.schemas.agent import (
 )
 from app.schemas.market import DATA_DISCLAIMER, DATA_SOURCE
 from app.services import market_data
+from app.services.bedrock import BedrockClient
 from app.services.market_data import DataValidationError
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -73,6 +82,24 @@ def get_decider_client() -> DeciderClient:
     return DeciderClient(
         base_url=settings.decider_base_url,
         timeout=settings.decider_timeout_seconds,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_bedrock_client() -> BedrockClient:
+    """The shared client for Amazon Bedrock.
+
+    The AWS credentials are not resolved here. `boto3` resolves them from the
+    ambient chain when a call is actually made, so this only names a profile.
+    """
+    settings = get_settings()
+    return BedrockClient(
+        region=settings.aws_region,
+        model_id=settings.bedrock_model_id,
+        profile=settings.aws_profile,
+        timeout=settings.bedrock_timeout_seconds,
+        max_tokens=settings.bedrock_max_tokens,
+        temperature=settings.bedrock_temperature,
     )
 
 
@@ -136,12 +163,17 @@ def _failure(
 def decide(
     request: AgentRequest,
     client: DeciderClient = Depends(get_decider_client),
+    bedrock_client: BedrockClient = Depends(get_bedrock_client),
 ):
-    """Ask the Decider which tool to run, then run that tool.
+    """Ask the Decider which tool to run, then run that tool, then explain it.
 
     The tool is chosen by the model; it is executed only if it is on the
     allowlist. The response carries the model's own probabilities and
     confidence, so the decision can be audited rather than taken on trust.
+
+    Amazon Bedrock then explains the numbers the tool produced. Bedrock never
+    chooses the tool and never supplies a number. If the explanation cannot be
+    generated, the response says so and carries no explanation text.
     """
     settings = get_settings()
     symbol = _normalise_symbol(request.symbol)
@@ -210,6 +242,15 @@ def decide(
         wrapper = _RESULT_WRAPPERS[outcome.tool.kind]
         result = wrapper(data=outcome.result)
 
+    explanation_text, explanation_status, explanation_error, bedrock = _explain(
+        bedrock_client=bedrock_client,
+        requested=request.explain,
+        enabled=settings.bedrock_enabled,
+        operation=outcome.tool.name,
+        result=outcome.result,
+        question=request.question,
+    )
+
     return AgentDecisionResponse(
         decision_made=True,
         question=request.question,
@@ -221,23 +262,88 @@ def decide(
         data_source=DATA_SOURCE,
         disclaimer=DATA_DISCLAIMER,
         note=outcome.note,
+        explanation=explanation_text,
+        explanation_status=explanation_status,
+        explanation_error=explanation_error,
+        bedrock=bedrock,
+    )
+
+
+def _explain(
+    *,
+    bedrock_client: BedrockClient,
+    requested: bool,
+    enabled: bool,
+    operation: str,
+    result: Any,
+    question: str,
+) -> tuple[str | None, str, str | None, BedrockMetadata | None]:
+    """Ask Bedrock to explain the result, and report honestly what happened.
+
+    A Bedrock failure never produces a fabricated explanation and never fails
+    the request: the decision and the market data are real whatever the
+    explanation layer does, so the explanation is reported separately, with a
+    status that says exactly what happened.
+    """
+    if not enabled:
+        return None, "disabled", "The Bedrock explanation layer is turned off.", None
+    if not requested:
+        return None, "skipped", None, None
+    if operation == tools.NO_ACTION or result is None:
+        # `no_action` -- there is no market data to explain, so no call is
+        # made and nothing is charged for one.
+        return None, "skipped", None, None
+
+    try:
+        explanation = explainer.explain_result(
+            client=bedrock_client,
+            operation=operation,
+            result=result,
+            question=question,
+        )
+    except ExplanationError as exc:
+        return None, exc.status, str(exc), None
+
+    return (
+        explanation.text,
+        "generated",
+        None,
+        BedrockMetadata(
+            model_id=explanation.model_id,
+            region=explanation.region,
+            stop_reason=explanation.stop_reason,
+            input_tokens=explanation.input_tokens,
+            output_tokens=explanation.output_tokens,
+            latency_ms=explanation.latency_ms,
+        ),
     )
 
 
 @router.get(
     "/status",
     response_model=AgentStatusResponse,
-    summary="Whether the local Decider service is reachable.",
+    summary="Whether the local Decider service is reachable, and Bedrock readiness.",
 )
 def agent_status(
     client: DeciderClient = Depends(get_decider_client),
+    bedrock_client: BedrockClient = Depends(get_bedrock_client),
 ):
     """Report whether the Decider service is up, and what it is serving.
 
     This is the pre-flight check to run before a demo: the Decider needs
     about 28 seconds to start once its weights are on disk.
+
+    It also reports whether the Bedrock explanation layer is configured and
+    whether AWS credentials could be resolved. The credential value is never
+    read into the response -- only whether one was found.
     """
     settings = get_settings()
+    bedrock_enabled = settings.bedrock_enabled
+    bedrock_credentials = (
+        bedrock_client.credentials_available() if bedrock_enabled else None
+    )
+    bedrock_note = _bedrock_note(bedrock_enabled, bedrock_credentials, settings)
+
     try:
         health = client.health()
     except DeciderError as exc:
@@ -245,9 +351,15 @@ def agent_status(
             decider_reachable=False,
             service_url=settings.decider_base_url,
             timeout_seconds=settings.decider_timeout_seconds,
+            bedrock_enabled=bedrock_enabled,
+            bedrock_model_id=settings.bedrock_model_id,
+            bedrock_region=settings.aws_region,
+            bedrock_profile=settings.aws_profile or None,
+            bedrock_credentials_found=bedrock_credentials,
             note=(
                 f"The Decider service is not reachable: {exc} "
-                "Start it with 'strands-decider serve' on 127.0.0.1:8100."
+                "Start it with 'strands-decider serve' on 127.0.0.1:8100. "
+                + bedrock_note
             ),
         )
         return JSONResponse(
@@ -264,12 +376,39 @@ def agent_status(
         device=_optional_str(health.get("device")),
         num_slots=health.get("num_slots") if isinstance(health.get("num_slots"), int) else None,
         max_length=health.get("max_length") if isinstance(health.get("max_length"), int) else None,
+        bedrock_enabled=bedrock_enabled,
+        bedrock_model_id=settings.bedrock_model_id,
+        bedrock_region=settings.aws_region,
+        bedrock_profile=settings.aws_profile or None,
+        bedrock_credentials_found=bedrock_credentials,
         note=(
             "The Decider service is up. A decision takes about 3.7 to 5.8 seconds "
-            "on CPU, so the caller should show a waiting state."
+            "on CPU, so the caller should show a waiting state. " + bedrock_note
         ),
     )
     return body
+
+
+def _bedrock_note(
+    enabled: bool, credentials_found: bool | None, settings
+) -> str:
+    """One sentence about the Bedrock layer, for the status note."""
+    if not enabled:
+        return "The Bedrock explanation layer is turned off."
+    if credentials_found is True:
+        return (
+            f"AWS credentials were found, so Bedrock will call "
+            f"{settings.bedrock_model_id} in {settings.aws_region}."
+        )
+    if credentials_found is False:
+        return (
+            "No AWS credentials were found, so Bedrock cannot be called. "
+            "Configure an AWS profile or sign in with IAM Identity Center."
+        )
+    return (
+        "The AWS credentials could not be determined, so Bedrock may not be "
+        "callable. Check the AWS_PROFILE setting."
+    )
 
 
 def _optional_str(value: Any) -> str | None:

@@ -15,11 +15,14 @@ next. Full detail lives in the linked documents.
 | **Part 2** — market backend | Done | `/market/*` endpoints, stdlib-only analysis, 46 tests |
 | **Part 2** — market dashboard | Done | React dashboard reading the three `/market` endpoints |
 | **Decider 2B spike** | Done | Real model, real HTTP decision, measured |
-| **Bedrock research** | Done | Plan + citations, nothing implemented |
+| **Bedrock research** | Done | Plan + citations, verified against the live AWS docs |
 | **Part 3 (Decider half)** | **Done, verified against the running model** | `POST /agent/decide`: the Decider chooses the tool, the backend runs it |
+| **Part 4 (Bedrock half)** | **Implemented, tested with mocks. Not live** | The same endpoint now explains the numbers. No AWS call has been made. |
+| **Submission-readiness pass** | **Done** | README, `architecture.md` and the licence notes rewritten to match the code; local machine paths removed; the stale frontend agent types replaced with the real ones. Nothing staged, nothing committed. |
 
-Committed as `1a6071d` → `4a76851` → `df2988d`. The Part 3 work is in the
-working tree, uncommitted.
+Committed as `1a6071d` → `4a76851` → `df2988d` → `b7f1072`. The Part 3 work
+is committed. **The Part 4 work and the documentation pass are in the working
+tree, uncommitted.**
 
 ### What Part 3 added
 
@@ -44,23 +47,29 @@ instructed.
 ## 2. Test and build results
 
 ```
-backend   pytest          -> 67 passed, 1 warning (1.83s)
-          46 pre-existing + 21 new in tests/test_agent.py
+backend   pytest          -> 105 passed, 1 warning (7.3s)
+          46 pre-existing + 21 in tests/test_agent.py + 38 in tests/test_bedrock.py
           (warning is Starlette/httpx deprecation - pre-existing, not ours)
 
-frontend  npm run build   -> tsc --noEmit && vite build, built in 264ms
-          dist/assets/index-cSMHH8p3.js  233.46 kB | gzip 73.26 kB
-          dist/assets/index-H85w7uhX.css   8.34 kB | gzip  2.57 kB
-          (byte-identical to the Part 2 build - no frontend file was touched)
+frontend  npm run build   -> tsc --noEmit && vite build   PASSED
+          (the submission pass replaced the stale provisional agent types in
+          frontend/src/types/agent.ts, so the build was re-run: tsc clean,
+          23 modules, 233 kB JS / 74 kB gzipped)
 ```
 
-The 21 new tests mock the HTTP boundary with `httpx.MockTransport`, so the real
+The 21 agent tests mock the HTTP boundary with `httpx.MockTransport`, so the real
 client code — request body, response parsing, error mapping — is exercised
 without loading the model or running any inference. They cover: successful
 selection, each tool executing correctly, an invalid choice, a timeout, an
 unavailable service, a malformed answer, a non-choice answer, non-JSON, the
 `no_action` path, empty-question and unknown-symbol validation, symbol
 normalisation, the status endpoint, and the loopback-only URL rule.
+
+The 38 Bedrock tests mock the AWS boundary with a fake `bedrock-runtime`
+client. The **real** `BedrockClient` sits in front of the fake, so the request
+building, response parsing and AWS error mapping all run — without a
+credential and without a billable call. The fixture is **autouse**, so no test
+in the suite can reach AWS.
 
 ---
 
@@ -123,22 +132,33 @@ words that the model did not make a usable decision.
 
 ---
 
-## 4. Bedrock — blockers
+## 4. Bedrock — implemented, blocked on the account
 
-**Nothing implemented. No AWS call has ever been made; no credential has been
-read, printed, or created.** Plan: [`bedrock-research.md`](bedrock-research.md).
+**The code is written and covered by mocked tests. No AWS call has ever been
+made; no credential has been read, printed, or created.** Detail:
+[`bedrock-research.md`](bedrock-research.md) §10.
+
+What works today, end to end: the Decider picks the tool, the backend runs it,
+and `POST /agent/decide` then asks Bedrock to explain the numbers. What does
+not work is the one thing that needs the account.
 
 | # | Blocker | Owner |
 |---|---|---|
 | 1 | No AWS profile or SSO configured — CLI not installed, no `~/.aws/config` or `credentials` on this machine | You |
-| 2 | No IAM policy granting `bedrock:Converse` + read-only discovery actions | You |
+| 2 | No IAM policy granting `bedrock:Converse` (and `bedrock:InvokeModel`) + read-only discovery actions | You |
 | 3 | Anthropic first-time-use form not submitted for the account | You |
 | 4 | Region choice — `ap-south-1` is natural, but Claude 5.5 there is **Global-inference-only**, so `modelId` must be `global.anthropic.claude-haiku-5-5` | You |
 | 5 | Model access unverified — `get-foundation-model-availability` not run, because it needs a working profile | You, then us |
 
-Afterwards set `AWS_REGION`, `AWS_PROFILE`, `BEDROCK_MODEL_ID` in `backend/.env`
-(the placeholders already exist). Never put AWS secrets in `frontend/.env` —
-Vite bundles frontend env vars into browser code.
+`AWS_REGION`, `AWS_PROFILE`, `BEDROCK_MODEL_ID` and the rest already exist in
+`backend/.env.example` with working defaults. Never put AWS secrets in
+`frontend/.env` — Vite bundles frontend env vars into browser code.
+
+**Until the account is ready, the endpoint still works.** A Bedrock failure
+never fails the request and never produces a fabricated explanation: the
+decision and the market data come back, and `explanation_status` says what
+happened (`unavailable` when Bedrock cannot be used, `failed` when a call was
+made and did not produce one).
 
 ---
 
@@ -146,7 +166,7 @@ Vite bundles frontend env vars into browser code.
 
 | # | Issue | Severity |
 |---|---|---|
-| 1 | No AWS profile on this machine — blocks all Bedrock work | Blocker |
+| 1 | No AWS profile on this machine — blocks the *live* Bedrock call. The code is ready for it | Blocker |
 | 2 | A decision takes 6–9 s on CPU, so any UI needs a waiting state | Known |
 | 3 | The `state` prefix is rebuilt per question, so the service's prefix cache rarely helps | Low |
 | 4 | `noul` and `score` question types were never exercised — only `choice` | Low |
@@ -157,26 +177,24 @@ Vite bundles frontend env vars into browser code.
 
 ---
 
-## 6. Next task — Part 3, the Bedrock half
+## 6. Next task — make Bedrock live, then submit
 
-**Goal:** Bedrock explains the numbers the Decider's chosen tool produced.
-The Decider chooses the tool; Bedrock only explains. Bedrock must never
-choose a tool and must never invent a number.
+**Goal:** get one real Bedrock call through, so the demo shows a genuine
+explanation rather than a mocked one.
 
-Blocked on §4. When the AWS side is ready:
+The code is done. What is left is the account side in §4:
 
-1. Add `boto3` to `backend/requirements.txt` (it is the only new dependency;
-   `boto3` is not installed yet and nothing was installed for this).
-2. Add a `app/services/bedrock.py` that calls `bedrock-runtime` `converse`
-   with the analysis result supplied as data, and returns a plain-text
-   explanation. The research doc has a minimal, credential-safe example.
-3. Extend the agent flow: the Decider picks the tool, the tool runs, and
-   Bedrock turns the result into an explanation. Return both the model's
-   probabilities and the explanation, so the decision is still auditable.
-4. Keep the synthetic-data warning in the Bedrock prompt. The model must not
-   present demo prices as real quotes.
-5. Never log or echo the AWS credentials, and never let a Bedrock failure
-   produce a fabricated explanation — say the explanation was not generated.
+1. Install the AWS CLI v2 and configure a profile or SSO, then
+   `aws sso login --profile <name>`.
+2. Grant the least-privilege policy in `bedrock-research.md` §5. It now lists
+   **both** `bedrock:Converse` and `bedrock:InvokeModel` — the AWS docs name
+   each of them, and which one the account needs is unverified.
+3. Submit the Anthropic first-time-use form (once per account).
+4. Verify access with `aws bedrock get-foundation-model-availability
+   --model-id anthropic.claude-haiku-5-5`.
+5. Set `AWS_PROFILE` in `backend/.env` and make one `POST /agent/decide` call.
+   **Report the intended model, region and cost before the first billable
+   call.**
 
 ### Also still to do
 - Virtual trading and portfolio management (the game layer).
@@ -184,6 +202,9 @@ Blocked on §4. When the AWS side is ready:
   submission requirements, and the measured latency table in §3 is the
   material for the *"Effective use of Decider 2B"* criterion.
 - `#strands-decider-2b` + `#tool-selection` tags are already in the README.
+- **The frontend has no chat interface.** The explanation is returned by the
+  API but nothing displays it yet, so a demo video cannot show it. Adding one
+  is the highest-value remaining work.
 
 ---
 
@@ -192,7 +213,7 @@ Blocked on §4. When the AWS side is ready:
 Safe to commit. Verified on 2026-10-23:
 
 - The git index is **empty** — nothing is staged.
-- The current change set is **16 paths**: 9 modified, 7 new, all source and
+- The current change set is **21 paths**: 16 modified, 5 new, all source and
   documentation.
 - **Not tracked and not tracked by accident:** `backend/.env`, `frontend/.env`,
   every `.venv/`, `node_modules/`, `frontend/dist/`,
@@ -203,7 +224,24 @@ Safe to commit. Verified on 2026-10-23:
   them is an empty placeholder.
 - No credential-shaped strings (AWS key IDs, private keys, bearer tokens,
   GitHub/Slack/OpenAI tokens, JWTs) in any changed file.
+- **Local machine paths removed** from the four files that carried them:
+  `experiments/decider-spike.md` (2 places) and the `command` field in
+  `experiments/decider-spike/spike-result.json` and `warm-start-result.json`.
+  They now use a repo-relative or `path\to\...` form.
+  **This does not remove them from the existing Git history** — commit
+  `df2988d` still contains the absolute path, and rewriting history is not
+  worth it for a path that is no longer valid anywhere.
 
-Local-only artifacts still on disk (safe to delete later, not tracked):
-`experiments/decider-spike/.venv/` (841 MB), `experiments/decider-spike/hf-cache/`
-(4.56 GB), `backend/.venv/`, `frontend/node_modules/`, `frontend/dist/`.
+### What the submission pass changed
+
+| File | Change |
+|---|---|
+| `README.md` | Status header, structure table, environment variables, the `/agent/decide` response example, a rewritten §11 (Bedrock: implemented, not live), Bedrock rows in the error table, the licence section, and the git section |
+| `docs/architecture.md` | The Bedrock layer added to the diagram and the rules; the "not built yet" list corrected |
+| `docs/decision-pattern.md` | §3 retitled from "planned, not yet implemented" to "implemented in Part 3", and its fallback section corrected — the shipped code rejects an invalid choice and never falls back to a rule, and low-confidence routing to Bedrock is *not* implemented |
+| `frontend/src/types/agent.ts` | Replaced the provisional Part 1 placeholder types with types that mirror `backend/app/schemas/agent.py` |
+| `frontend/src/services/api.ts` | Replaced `analyzeStock()` — which pointed at `/agent/analyze`, an endpoint that does not exist — with `decide()`, which points at the real `/agent/decide` |
+| `experiments/*` | Local absolute paths removed |
+
+The two frontend changes are the only source files the pass touched, and the
+frontend build was re-run after them.

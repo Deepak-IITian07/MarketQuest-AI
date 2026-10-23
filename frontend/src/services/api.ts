@@ -1,4 +1,8 @@
-import type { AgentAnalysisRequest, AgentAnalysisResponse, HealthResponse } from "../types/agent";
+import type {
+  AgentDecisionResponse,
+  AgentRequest,
+  HealthResponse,
+} from "../types/agent";
 import type {
   AnalysisResponse,
   PriceHistoryResponse,
@@ -63,9 +67,16 @@ export const getPrices = (symbol: string, signal?: AbortSignal) =>
 export const getAnalysis = (symbol: string, signal?: AbortSignal) =>
   request<AnalysisResponse>(`/market/analysis/${encodeURIComponent(symbol)}`, { signal });
 
-// PLANNED (Part 2+): the backend endpoint does not exist yet.
-export const analyzeStock = (body: AgentAnalysisRequest) =>
-  request<AgentAnalysisResponse>("/agent/analyze", {
+/**
+ * Ask the Decider which market tool answers the question, run that tool, and
+ * return the decision, the market data and (if Bedrock is available) an
+ * explanation of the numbers.
+ *
+ * The dashboard does not call this yet -- there is no chat interface -- but
+ * the endpoint exists and the shapes below mirror the backend exactly.
+ */
+export const decide = (body: AgentRequest) =>
+  request<AgentDecisionResponse>("/agent/decide", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
