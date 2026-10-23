@@ -4,6 +4,7 @@ import PanelState from "../components/PanelState";
 import PriceChart from "../components/PriceChart";
 import StatusBadge from "../components/StatusBadge";
 import SymbolSelector from "../components/SymbolSelector";
+import AgentPanel from "../components/AgentPanel";
 import { ApiError, getAnalysis, getPrices, getSymbols } from "../services/api";
 import type { AnalysisResponse, PricePoint, SymbolQuote } from "../types/market";
 import {
@@ -172,6 +173,9 @@ export default function Dashboard() {
       </section>
 
       <main className="dashboard">
+        <section className="panel panel-agent">
+          <AgentPanel />
+        </section>
         <section className="panel panel-selector">
           <div className="panel-head">
             <h2>Choose a symbol</h2>
